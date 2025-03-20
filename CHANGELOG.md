@@ -28,8 +28,6 @@ BUG FIXES:
 
 * Avoid reporting duplicate attribute-associated diagnostics, such as "Available Write-only Attribute Alternative" ([#36579](https://github.com/hashicorp/terraform/issues/36579))
 
-* Fixes unintended exit of CLI when using the remote backend and applying with post-plan tasks configured in HCP Terraform ([#36655](https://github.com/hashicorp/terraform/issues/36655))
-
 
 UPGRADE NOTES:
 
