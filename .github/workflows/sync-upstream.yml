@@ -5,6 +5,10 @@ on:
     - cron: '0 */6 * * *'  # runs every 6 hours
   workflow_dispatch:       # manually triggerable
 
+permissions:
+  contents: write          # push commits
+  workflows: write         # touch anything in .github/workflows/
+
 jobs:
   sync:
     runs-on: ubuntu-latest
