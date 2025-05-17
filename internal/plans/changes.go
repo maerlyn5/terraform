@@ -551,18 +551,28 @@ func (oc *OutputChange) Encode() (*OutputChangeSrc, error) {
 // The fields in here are subject to change, so downstream consumers should be
 // prepared for backwards compatibility in case the contents changes.
 type Importing struct {
-	ID cty.Value
+	Target cty.Value
 }
 
 // Encode converts the Importing object into a form suitable for serialization
 // to a plan file.
-func (i *Importing) Encode() *ImportingSrc {
+func (i *Importing) Encode(identityTy cty.Type) *ImportingSrc {
 	if i == nil {
 		return nil
 	}
-	if i.ID.IsKnown() {
-		return &ImportingSrc{
-			ID: i.ID.AsString(),
+	if i.Target.IsWhollyKnown() {
+		if i.Target.Type().IsObjectType() {
+			identity, err := NewDynamicValue(i.Target, identityTy)
+			if err != nil {
+				return nil
+			}
+			return &ImportingSrc{
+				Identity: identity,
+			}
+		} else {
+			return &ImportingSrc{
+				ID: i.Target.AsString(),
+			}
 		}
 	}
 	return &ImportingSrc{
@@ -686,7 +696,7 @@ func (c *Change) Encode(schema *providers.Schema) (*ChangeSrc, error) {
 		AfterSensitivePaths:  sensitiveAttrsAfter,
 		BeforeIdentity:       beforeIdentityDV,
 		AfterIdentity:        afterIdentityDV,
-		Importing:            c.Importing.Encode(),
+		Importing:            c.Importing.Encode(identityTy),
 		GeneratedConfig:      c.GeneratedConfig,
 	}, nil
 }

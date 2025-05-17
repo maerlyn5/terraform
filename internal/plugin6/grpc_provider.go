@@ -142,6 +142,11 @@ func (p *GRPCProvider) GetProviderSchema() providers.GetProviderSchemaResponse {
 		}
 	}
 
+	resp.Diagnostics = resp.Diagnostics.Append(convert.ProtoToDiagnostics(identResp.Diagnostics))
+	if resp.Diagnostics.HasErrors() {
+		return resp
+	}
+
 	resp.Provider = convert.ProtoToProviderSchema(protoResp.Provider, nil)
 	if protoResp.ProviderMeta == nil {
 		logger.Debug("No provider meta schema returned")
@@ -841,7 +846,7 @@ func (p *GRPCProvider) ImportResourceState(r providers.ImportResourceStateReques
 				resp.Diagnostics = resp.Diagnostics.Append(fmt.Errorf("unknown resource type %q", imported.TypeName))
 				continue
 			}
-			importedIdentity, err := decodeDynamicValue(imported.Identity.IdentityData, importedIdentitySchema.Body.ImpliedType())
+			importedIdentity, err := decodeDynamicValue(imported.Identity.IdentityData, importedIdentitySchema.Identity.ImpliedType())
 			if err != nil {
 				resp.Diagnostics = resp.Diagnostics.Append(err)
 				return resp

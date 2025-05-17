@@ -322,6 +322,18 @@ func TestTest_Runs(t *testing.T) {
 			expectedErr: []string{"Cannot apply non-applyable plan"},
 			code:        1,
 		},
+		"write-only-attributes": {
+			expectedOut: []string{"1 passed, 0 failed."},
+			code:        0,
+		},
+		"write-only-attributes-mocked": {
+			expectedOut: []string{"1 passed, 0 failed."},
+			code:        0,
+		},
+		"write-only-attributes-overridden": {
+			expectedOut: []string{"1 passed, 0 failed."},
+			code:        0,
+		},
 	}
 	for name, tc := range tcs {
 		t.Run(name, func(t *testing.T) {
@@ -1482,9 +1494,8 @@ func TestTest_ModuleDependencies(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -1498,7 +1509,7 @@ func TestTest_ModuleDependencies(t *testing.T) {
 	}
 
 	code := command.Run(nil)
-	output = done(t)
+	output := done(t)
 
 	printedOutput := false
 
@@ -1618,6 +1629,7 @@ Terraform will perform the following actions:
       + destroy_fail = (known after apply)
       + id           = "constant_value"
       + value        = "bar"
+      + write_only   = (write-only attribute)
     }
 
 Plan: 1 to add, 0 to change, 0 to destroy.
@@ -1629,6 +1641,7 @@ resource "test_resource" "foo" {
     destroy_fail = false
     id           = "constant_value"
     value        = "bar"
+    write_only   = (write-only attribute)
 }
 
 main.tftest.hcl... tearing down
@@ -1798,9 +1811,8 @@ can remove the provider configuration again.
 				Meta: meta,
 			}
 
-			output := done(t)
-
 			if code := init.Run(nil); code != 0 {
+				output := done(t)
 				t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 			}
 
@@ -1814,7 +1826,7 @@ can remove the provider configuration again.
 			}
 
 			code := c.Run([]string{"-no-color"})
-			output = done(t)
+			output := done(t)
 
 			if code != 1 {
 				t.Errorf("expected status code 1 but got %d", code)
@@ -1921,9 +1933,8 @@ func TestTest_StatePropagation(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -1937,7 +1948,7 @@ func TestTest_StatePropagation(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-verbose", "-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 0 {
 		t.Errorf("expected status code 0 but got %d", code)
@@ -1951,6 +1962,7 @@ resource "test_resource" "module_resource" {
     destroy_fail = false
     id           = "df6h8as9"
     value        = "start"
+    write_only   = (write-only attribute)
 }
 
   run "initial_apply"... pass
@@ -1960,6 +1972,7 @@ resource "test_resource" "resource" {
     destroy_fail = false
     id           = "598318e0"
     value        = "start"
+    write_only   = (write-only attribute)
 }
 
   run "plan_second_example"... pass
@@ -1975,6 +1988,7 @@ Terraform will perform the following actions:
       + destroy_fail = (known after apply)
       + id           = "b6a1d8cb"
       + value        = "start"
+      + write_only   = (write-only attribute)
     }
 
 Plan: 1 to add, 0 to change, 0 to destroy.
@@ -1991,7 +2005,7 @@ Terraform will perform the following actions:
   ~ resource "test_resource" "resource" {
         id           = "598318e0"
       ~ value        = "start" -> "update"
-        # (1 unchanged attribute hidden)
+        # (2 unchanged attributes hidden)
     }
 
 Plan: 0 to add, 1 to change, 0 to destroy.
@@ -2008,7 +2022,7 @@ Terraform will perform the following actions:
   ~ resource "test_resource" "module_resource" {
         id           = "df6h8as9"
       ~ value        = "start" -> "update"
-        # (1 unchanged attribute hidden)
+        # (2 unchanged attributes hidden)
     }
 
 Plan: 0 to add, 1 to change, 0 to destroy.
@@ -2021,8 +2035,8 @@ Success! 5 passed, 0 failed.
 
 	actual := output.All()
 
-	if !strings.Contains(actual, expected) {
-		t.Errorf("output didn't match expected:\nexpected:\n%s\nactual:\n%s", expected, actual)
+	if diff := cmp.Diff(expected, actual); diff != "" {
+		t.Errorf("output didn't match expected:\nexpected:\n%s\nactual:\n%s\ndiff:\n%s", expected, actual, diff)
 	}
 
 	if provider.ResourceCount() > 0 {
@@ -2058,9 +2072,8 @@ func TestTest_OnlyExternalModules(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -2074,7 +2087,7 @@ func TestTest_OnlyExternalModules(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 0 {
 		t.Errorf("expected status code 0 but got %d", code)
@@ -2194,9 +2207,8 @@ func TestTest_InvalidWarningsInCleanup(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -2210,7 +2222,7 @@ func TestTest_InvalidWarningsInCleanup(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 0 {
 		t.Errorf("expected status code 0 but got %d", code)
@@ -2793,9 +2805,8 @@ func TestTest_SensitiveInputValues(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -2809,7 +2820,7 @@ func TestTest_SensitiveInputValues(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-no-color", "-verbose"})
-	output = done(t)
+	output := done(t)
 
 	if code != 1 {
 		t.Errorf("expected status code 1 but got %d", code)
@@ -2831,6 +2842,7 @@ resource "test_resource" "resource" {
     destroy_fail = false
     id           = "9ddca5a9"
     value        = (sensitive value)
+    write_only   = (write-only attribute)
 }
 
 
@@ -2845,6 +2857,7 @@ resource "test_resource" "resource" {
     destroy_fail = false
     id           = "9ddca5a9"
     value        = (sensitive value)
+    write_only   = (write-only attribute)
 }
 
 
@@ -3069,9 +3082,8 @@ func TestTest_InvalidOverrides(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -3085,7 +3097,7 @@ func TestTest_InvalidOverrides(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 0 {
 		t.Errorf("expected status code 0 but got %d", code)
@@ -3169,9 +3181,8 @@ func TestTest_InvalidConfig(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -3185,7 +3196,7 @@ func TestTest_InvalidConfig(t *testing.T) {
 	}
 
 	code := c.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 1 {
 		t.Errorf("expected status code ! but got %d", code)
@@ -3252,9 +3263,8 @@ func TestTest_RunBlocksInProviders(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -3268,7 +3278,7 @@ func TestTest_RunBlocksInProviders(t *testing.T) {
 	}
 
 	code := test.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 0 {
 		t.Errorf("expected status code 0 but got %d", code)
@@ -3320,9 +3330,8 @@ func TestTest_RunBlocksInProviders_BadReferences(t *testing.T) {
 		Meta: meta,
 	}
 
-	output := done(t)
-
 	if code := init.Run(nil); code != 0 {
+		output := done(t)
 		t.Fatalf("expected status code 0 but got %d: %s", code, output.All())
 	}
 
@@ -3336,7 +3345,7 @@ func TestTest_RunBlocksInProviders_BadReferences(t *testing.T) {
 	}
 
 	code := test.Run([]string{"-no-color"})
-	output = done(t)
+	output := done(t)
 
 	if code != 1 {
 		t.Errorf("expected status code 1 but got %d", code)
@@ -3454,7 +3463,7 @@ func TestTest_JUnitOutput(t *testing.T) {
 			}
 
 			// actual output will include timestamps and test duration data, which isn't deterministic; redact it for comparison
-			timeRegexp := regexp.MustCompile(`time=\"[0-9\.]+\"`)
+			timeRegexp := regexp.MustCompile(`time="[^"]+"`)
 			actualOut = timeRegexp.ReplaceAll(actualOut, []byte("time=\"TIME_REDACTED\""))
 			timestampRegexp := regexp.MustCompile(`timestamp="[^"]+"`)
 			actualOut = timestampRegexp.ReplaceAll(actualOut, []byte("timestamp=\"TIMESTAMP_REDACTED\""))

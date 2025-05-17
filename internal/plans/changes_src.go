@@ -349,6 +349,9 @@ type ImportingSrc struct {
 	// ID is the original ID of the imported resource.
 	ID string
 
+	// Identity is the original identity of the imported resource.
+	Identity DynamicValue
+
 	// Unknown is true if the ID was unknown when we tried to import it. This
 	// should only be true if the overall change is embedded within a deferred
 	// action.
@@ -356,18 +359,36 @@ type ImportingSrc struct {
 }
 
 // Decode unmarshals the raw representation of the importing action.
-func (is *ImportingSrc) Decode() *Importing {
+func (is *ImportingSrc) Decode(identityType cty.Type) *Importing {
 	if is == nil {
 		return nil
 	}
 	if is.Unknown {
+		if is.Identity == nil {
+			return &Importing{
+				Target: cty.UnknownVal(cty.String),
+			}
+		}
+
 		return &Importing{
-			ID: cty.UnknownVal(cty.String),
+			Target: cty.UnknownVal(cty.EmptyObject),
 		}
 	}
-	return &Importing{
-		ID: cty.StringVal(is.ID),
+
+	if is.Identity == nil {
+		return &Importing{
+			Target: cty.StringVal(is.ID),
+		}
 	}
+
+	target, err := is.Identity.Decode(identityType)
+	if err != nil {
+		return &Importing{
+			Target: target,
+		}
+	}
+
+	return nil
 }
 
 // ChangeSrc is a not-yet-decoded Change.
@@ -460,7 +481,7 @@ func (cs *ChangeSrc) Decode(schema *providers.Schema) (*Change, error) {
 		BeforeIdentity:  beforeIdentity,
 		After:           marks.MarkPaths(after, marks.Sensitive, cs.AfterSensitivePaths),
 		AfterIdentity:   afterIdentity,
-		Importing:       cs.Importing.Decode(),
+		Importing:       cs.Importing.Decode(identityType),
 		GeneratedConfig: cs.GeneratedConfig,
 	}, nil
 }

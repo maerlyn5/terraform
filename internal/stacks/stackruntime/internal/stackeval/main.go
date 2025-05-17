@@ -20,6 +20,7 @@ import (
 	remoteExecProvisioner "github.com/hashicorp/terraform/internal/builtin/provisioners/remote-exec"
 	"github.com/hashicorp/terraform/internal/depsfile"
 	"github.com/hashicorp/terraform/internal/lang"
+	"github.com/hashicorp/terraform/internal/plans"
 	"github.com/hashicorp/terraform/internal/providers"
 	"github.com/hashicorp/terraform/internal/provisioners"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
@@ -83,7 +84,7 @@ type Main struct {
 	mainStackConfig         *StackConfig
 	mainStack               *Stack
 	providerTypes           map[addrs.Provider]*ProviderType
-	providerFunctionResults *providers.FunctionResults
+	providerFunctionResults *lang.FunctionResults
 	cleanupFuncs            []func(context.Context) tfdiags.Diagnostics
 }
 
@@ -115,7 +116,7 @@ func NewForValidating(config *stackconfig.Config, opts ValidateOpts) *Main {
 		},
 		providerFactories:       opts.ProviderFactories,
 		providerTypes:           make(map[addrs.Provider]*ProviderType),
-		providerFunctionResults: providers.NewFunctionResultsTable(nil),
+		providerFunctionResults: lang.NewFunctionResultsTable(nil),
 	}
 }
 
@@ -133,7 +134,7 @@ func NewForPlanning(config *stackconfig.Config, prevState *stackstate.State, opt
 		},
 		providerFactories:       opts.ProviderFactories,
 		providerTypes:           make(map[addrs.Provider]*ProviderType),
-		providerFunctionResults: providers.NewFunctionResultsTable(nil),
+		providerFunctionResults: lang.NewFunctionResultsTable(nil),
 	}
 }
 
@@ -147,7 +148,7 @@ func NewForApplying(config *stackconfig.Config, plan *stackplan.Plan, execResult
 		},
 		providerFactories:       opts.ProviderFactories,
 		providerTypes:           make(map[addrs.Provider]*ProviderType),
-		providerFunctionResults: providers.NewFunctionResultsTable(plan.ProviderFunctionResults),
+		providerFunctionResults: lang.NewFunctionResultsTable(plan.FunctionResults),
 	}
 }
 
@@ -160,7 +161,7 @@ func NewForInspecting(config *stackconfig.Config, state *stackstate.State, opts 
 		},
 		providerFactories:       opts.ProviderFactories,
 		providerTypes:           make(map[addrs.Provider]*ProviderType),
-		providerFunctionResults: providers.NewFunctionResultsTable(nil),
+		providerFunctionResults: lang.NewFunctionResultsTable(nil),
 		testOnlyGlobals:         opts.TestOnlyGlobals,
 	}
 }
@@ -295,7 +296,7 @@ func (m *Main) MainStackConfig() *StackConfig {
 	defer m.mu.Unlock()
 
 	if m.mainStackConfig == nil {
-		m.mainStackConfig = newStackConfig(m, stackaddrs.RootStack, m.config.Root)
+		m.mainStackConfig = newStackConfig(m, stackaddrs.RootStack, nil, m.config.Root)
 	}
 	return m.mainStackConfig
 }
@@ -303,45 +304,15 @@ func (m *Main) MainStackConfig() *StackConfig {
 // MainStack returns the [Stack] object representing the main stack, which
 // is the root of the configuration tree.
 func (m *Main) MainStack() *Stack {
+	config := m.MainStackConfig() // fetch the main stack config
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.mainStack == nil {
-		m.mainStack = newStack(m, stackaddrs.RootStackInstance)
+		m.mainStack = newStack(m, stackaddrs.RootStackInstance, nil, config, newRemoved(), m.PlanningMode(), false)
 	}
 	return m.mainStack
-}
-
-// StackConfig returns the [StackConfig] object representing the stack with
-// the given address, or nil if there is no such stack.
-func (m *Main) StackConfig(addr stackaddrs.Stack) *StackConfig {
-	ret := m.MainStackConfig()
-	for _, step := range addr {
-		ret = ret.ChildConfig(step)
-		if ret == nil {
-			return nil
-		}
-	}
-	return ret
-}
-
-// StackUnchecked returns the [Stack] object representing the stack instance
-// with the given address, or nil if the address traverses through an embedded
-// stack call that doesn't exist at all.
-//
-// This function cannot check whether the instance keys in the path correspond
-// to instances actually declared by the configuration. If you need to check
-// that use [Main.Stack] instead, but consider the additional overhead that
-// extra checking implies.
-func (m *Main) StackUnchecked(addr stackaddrs.StackInstance) *Stack {
-	ret := m.MainStack()
-	for _, step := range addr {
-		ret = ret.ChildStackUnchecked(step)
-		if ret == nil {
-			return nil
-		}
-	}
-	return ret
 }
 
 // Stack returns the [Stack] object representing the stack instance with the
@@ -365,7 +336,7 @@ func (m *Main) StackUnchecked(addr stackaddrs.StackInstance) *Stack {
 func (m *Main) Stack(ctx context.Context, addr stackaddrs.StackInstance, phase EvalPhase) *Stack {
 	ret := m.MainStack()
 	for _, step := range addr {
-		ret = ret.ChildStackChecked(ctx, step, phase)
+		ret = ret.ChildStack(ctx, step, phase)
 		if ret == nil {
 			return nil
 		}
@@ -599,29 +570,6 @@ func (m *Main) DoCleanup(ctx context.Context) tfdiags.Diagnostics {
 	return diags
 }
 
-// mustStackConfig is like [Main.StackConfig] except that it panics if it
-// does not find a stack configuration object matching the given address,
-// for situations where the absense of a stack config represents a bug
-// somewhere in Terraform, rather than incorrect user input.
-func (m *Main) mustStackConfig(addr stackaddrs.Stack) *StackConfig {
-	ret := m.StackConfig(addr)
-	if ret == nil {
-		panic(fmt.Sprintf("no configuration for %s", addr))
-	}
-	return ret
-}
-
-// StackCallConfig returns the [StackCallConfig] object representing the
-// "stack" block in the configuration with the given address, or nil if there
-// is no such block.
-func (m *Main) StackCallConfig(addr stackaddrs.ConfigStackCall) *StackCallConfig {
-	caller := m.StackConfig(addr.Stack)
-	if caller == nil {
-		return nil
-	}
-	return caller.StackCall(addr.Item)
-}
-
 // availableProvisioners returns the table of provisioner factories that should
 // be made available to modules in this component.
 func (m *Main) availableProvisioners() map[string]provisioners.Factory {
@@ -665,6 +613,16 @@ func (m *Main) PlanTimestamp() time.Time {
 
 	// This is the default case, we are not planning / applying
 	return time.Now().UTC()
+}
+
+func (m *Main) PlanningMode() plans.Mode {
+	if m.applying != nil {
+		return m.applying.plan.Mode
+	}
+	if m.planning != nil {
+		return m.planning.opts.PlanningMode
+	}
+	return plans.NormalMode
 }
 
 // DependencyLocks returns the dependency locks for the given phase.

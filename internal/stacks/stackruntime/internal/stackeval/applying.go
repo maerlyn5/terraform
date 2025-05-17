@@ -76,7 +76,7 @@ type Applyable interface {
 
 // ApplyableComponentInstance is an interface that represents a single instance
 // of a component that can be applied. This is going to be a ComponentInstance
-// or a RemovedInstance.
+// or a RemovedComponentInstance.
 type ApplyableComponentInstance interface {
 	ConfigComponentExpressionScope[stackaddrs.AbsComponentInstance]
 
@@ -114,7 +114,7 @@ func ApplyComponentPlan(ctx context.Context, main *Main, plan *plans.Plan, requi
 	// changed at all.
 	noOpResult := inst.PlaceholderApplyResultForSkippedApply(plan)
 
-	stackPlan := main.PlanBeingApplied().Components.Get(inst.Addr())
+	stackPlan := main.PlanBeingApplied().GetComponent(inst.Addr())
 
 	// We'll gather up our set of potentially-affected objects before we do
 	// anything else, because the modules runtime tends to mutate the objects

@@ -6,6 +6,7 @@ package stackeval
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -14,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform/internal/instances"
 	"github.com/hashicorp/terraform/internal/promising"
 	"github.com/hashicorp/terraform/internal/stacks/stackaddrs"
-	"github.com/hashicorp/terraform/internal/stacks/stackconfig"
 	"github.com/hashicorp/terraform/internal/stacks/stackplan"
 	"github.com/hashicorp/terraform/internal/stacks/stackruntime/hooks"
 	"github.com/hashicorp/terraform/internal/stacks/stackstate"
@@ -24,50 +24,29 @@ import (
 type Component struct {
 	addr stackaddrs.AbsComponent
 
-	main *Main
+	main   *Main
+	stack  *Stack
+	config *ComponentConfig
 
-	forEachValue    perEvalPhase[promising.Once[withDiagnostics[cty.Value]]]
-	instances       perEvalPhase[promising.Once[withDiagnostics[instancesResult[*ComponentInstance]]]]
-	unknownInstance perEvalPhase[promising.Once[*ComponentInstance]]
+	forEachValue perEvalPhase[promising.Once[withDiagnostics[cty.Value]]]
+	instances    perEvalPhase[promising.Once[withDiagnostics[instancesResult[*ComponentInstance]]]]
+
+	unknownInstancesMutex sync.Mutex
+	unknownInstances      map[addrs.InstanceKey]*ComponentInstance
 }
 
 var _ Plannable = (*Component)(nil)
 var _ Applyable = (*Component)(nil)
 var _ Referenceable = (*Component)(nil)
 
-func newComponent(main *Main, addr stackaddrs.AbsComponent) *Component {
+func newComponent(main *Main, addr stackaddrs.AbsComponent, stack *Stack, config *ComponentConfig) *Component {
 	return &Component{
-		addr: addr,
-		main: main,
+		addr:             addr,
+		main:             main,
+		stack:            stack,
+		config:           config,
+		unknownInstances: make(map[addrs.InstanceKey]*ComponentInstance),
 	}
-}
-
-func (c *Component) Addr() stackaddrs.AbsComponent {
-	return c.addr
-}
-
-func (c *Component) Config() *ComponentConfig {
-	configAddr := stackaddrs.ConfigForAbs(c.Addr())
-	stackConfig := c.main.StackConfig(configAddr.Stack)
-	if stackConfig == nil {
-		return nil
-	}
-	return stackConfig.Component(configAddr.Item)
-}
-
-func (c *Component) Declaration() *stackconfig.Component {
-	cfg := c.Config()
-	if cfg == nil {
-		return nil
-	}
-	return cfg.Declaration()
-}
-
-func (c *Component) Stack() *Stack {
-	// Unchecked because we should've been constructed from the same stack
-	// object we're about to return, and so this should be valid unless
-	// the original construction was from an invalid object itself.
-	return c.main.StackUnchecked(c.Addr().Stack)
 }
 
 // ForEachValue returns the result of evaluating the "for_each" expression
@@ -107,12 +86,12 @@ func (c *Component) CheckForEachValue(ctx context.Context, phase EvalPhase) (cty
 		ctx, c.tracingName()+" for_each", c.forEachValue.For(phase),
 		func(ctx context.Context) (cty.Value, tfdiags.Diagnostics) {
 			var diags tfdiags.Diagnostics
-			cfg := c.Declaration()
+			cfg := c.config.config
 
 			switch {
 
 			case cfg.ForEach != nil:
-				result, moreDiags := evaluateForEachExpr(ctx, cfg.ForEach, phase, c.Stack(), "component")
+				result, moreDiags := evaluateForEachExpr(ctx, cfg.ForEach, phase, c.stack, "component")
 				diags = diags.Append(moreDiags)
 				if diags.HasErrors() {
 					return cty.DynamicVal, diags
@@ -169,7 +148,7 @@ func (c *Component) CheckInstances(ctx context.Context, phase EvalPhase) (map[ad
 			}
 
 			result := instancesMap(forEachVal, func(ik addrs.InstanceKey, rd instances.RepetitionData) *ComponentInstance {
-				return newComponentInstance(c, stackaddrs.AbsComponentToInstance(c.addr, ik), rd, false)
+				return newComponentInstance(c, stackaddrs.AbsComponentToInstance(c.addr, ik), rd, c.stack.mode, c.stack.deferred)
 			})
 
 			addrs := make([]stackaddrs.AbsComponentInstance, 0, len(result.insts))
@@ -179,7 +158,7 @@ func (c *Component) CheckInstances(ctx context.Context, phase EvalPhase) (map[ad
 
 			h := hooksFromContext(ctx)
 			hookSingle(ctx, h.ComponentExpanded, &hooks.ComponentInstances{
-				ComponentAddr: c.Addr(),
+				ComponentAddr: c.addr,
 				InstanceAddrs: addrs,
 			})
 
@@ -189,20 +168,27 @@ func (c *Component) CheckInstances(ctx context.Context, phase EvalPhase) (map[ad
 	return result.insts, result.unknown, diags
 }
 
-func (c *Component) UnknownInstance(ctx context.Context, phase EvalPhase) *ComponentInstance {
-	inst, err := c.unknownInstance.For(phase).Do(ctx, c.tracingName()+" unknown instance", func(ctx context.Context) (*ComponentInstance, error) {
-		return newComponentInstance(c, stackaddrs.AbsComponentToInstance(c.addr, addrs.WildcardKey), instances.UnknownForEachRepetitionData(c.ForEachValue(ctx, phase).Type()), true), nil
-	})
-	if err != nil {
-		// Since we never return an error from the function we pass to Do,
-		// this should never happen.
-		panic(err)
+func (c *Component) UnknownInstance(ctx context.Context, key addrs.InstanceKey, phase EvalPhase) *ComponentInstance {
+	c.unknownInstancesMutex.Lock()
+	defer c.unknownInstancesMutex.Unlock()
+
+	if inst, ok := c.unknownInstances[key]; ok {
+		return inst
 	}
+
+	forEachType := c.ForEachValue(ctx, phase).Type()
+	repetitionData := instances.UnknownForEachRepetitionData(forEachType)
+	if key != addrs.WildcardKey {
+		repetitionData.EachKey = key.Value()
+	}
+
+	inst := newComponentInstance(c, stackaddrs.AbsComponentToInstance(c.addr, key), repetitionData, c.stack.mode, true)
+	c.unknownInstances[key] = inst
 	return inst
 }
 
 func (c *Component) ResultValue(ctx context.Context, phase EvalPhase) cty.Value {
-	decl := c.Declaration()
+	decl := c.config.config
 	insts, unknown := c.Instances(ctx, phase)
 
 	switch {
@@ -326,7 +312,7 @@ func (c *Component) PlanChanges(ctx context.Context) ([]stackplan.PlannedChange,
 
 // References implements Referrer
 func (c *Component) References(context.Context) []stackaddrs.AbsReference {
-	cfg := c.Declaration()
+	cfg := c.config.config
 	var ret []stackaddrs.Reference
 	ret = append(ret, ReferencesInExpr(cfg.ForEach)...)
 	ret = append(ret, ReferencesInExpr(cfg.Inputs)...)
@@ -334,7 +320,7 @@ func (c *Component) References(context.Context) []stackaddrs.AbsReference {
 		ret = append(ret, ReferencesInExpr(expr)...)
 	}
 	ret = append(ret, referencesInTraversals(cfg.DependsOn)...)
-	return makeReferencesAbsolute(ret, c.Addr().Stack)
+	return makeReferencesAbsolute(ret, c.addr.Stack)
 }
 
 // RequiredComponents returns the set of required components for this component.
@@ -372,5 +358,5 @@ func (c *Component) ApplySuccessful(ctx context.Context) bool {
 }
 
 func (c *Component) tracingName() string {
-	return c.Addr().String()
+	return c.addr.String()
 }
