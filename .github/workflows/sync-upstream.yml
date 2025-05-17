@@ -7,7 +7,6 @@ on:
 
 permissions:
   contents: write          # push commits
-  workflows: write         # touch anything in .github/workflows/
 
 jobs:
   sync:
